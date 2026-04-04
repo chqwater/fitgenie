@@ -84,30 +84,32 @@ def init_db():
 def create_user(username: str, password_hash: str, profile: dict) -> int:
     now = str(date.today())
     p = _ph()
-    with _get_conn() as conn:
+    conn = _get_conn()
+    try:
         cur = conn.cursor()
-        try:
-            cur.execute(f"""
-                INSERT INTO users
-                    (username, password_hash, name, age, weight_kg,
-                     height_cm, goal, activity_level, dietary_pref,
-                     created_at, updated_at)
-                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
-                RETURNING id
-            """, (
-                username, password_hash,
-                profile["name"], profile["age"], profile["weight_kg"],
-                profile["height_cm"], profile["goal"],
-                profile["activity_level"], profile["dietary_pref"],
-                now, now,
-            ))
-            conn.commit()
-            row = cur.fetchone()
-            return row[0]
-        except Exception as e:
-            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
-                raise ValueError(f"用户名 '{username}' 已存在")
-            raise
+        cur.execute(f"""
+            INSERT INTO users
+                (username, password_hash, name, age, weight_kg,
+                 height_cm, goal, activity_level, dietary_pref,
+                 created_at, updated_at)
+            VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+        """, (
+            username, password_hash,
+            profile["name"], profile["age"], profile["weight_kg"],
+            profile["height_cm"], profile["goal"],
+            profile["activity_level"], profile["dietary_pref"],
+            now, now,
+        ))
+        conn.commit()
+        user_id = cur.lastrowid
+        return user_id
+    except Exception as e:
+        conn.rollback()
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            raise ValueError(f"用户名 '{username}' 已存在")
+        raise
+    finally:
+        conn.close()
 
 
 def get_user_by_username(username: str) -> dict | None:

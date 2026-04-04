@@ -1,7 +1,7 @@
 # user_profile.py
 # 用户注册 CLI + 数据验证
 
-from memory.store import save_user, load_user, update_user_weight
+from memory.store import create_user, get_user_by_username, update_user
 
 # ── 合法值定义 ────────────────────────────────────────────
 
@@ -75,7 +75,7 @@ def register_user() -> dict:
         try:
             profile = _collect_input()
             validate_profile(profile)
-            user_id = save_user(profile)
+            user_id = create_user(profile)
             print(f"\n[Profile] ✅ 档案创建成功 (id={user_id})")
             _print_profile(profile)
             return profile
@@ -116,8 +116,8 @@ def _collect_input() -> dict:
 # ── 更新档案 ──────────────────────────────────────────────
 
 def update_profile_weight(weight_kg: float):
-    """Tracker 记录新体重后调用，同步更新用户档案"""
-    update_user_weight(weight_kg)
+    """已废弃，API 模式由 save_daily_log 处理体重更新"""
+    pass
 
 
 # ── 辅助函数 ──────────────────────────────────────────────

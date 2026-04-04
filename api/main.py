@@ -18,7 +18,12 @@ app = FastAPI(
 # 允许前端跨域请求
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],      # 生产环境换成具体域名
+    allow_origins=[
+        "https://fitgenier.up.railway.app",
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -40,22 +40,22 @@ def coach_and_diet_node(state: FitGenieState) -> dict:
 def finalize_node(state: FitGenieState) -> dict:
     print("\n[Finalize] 生成今日总结...")
 
+    from memory.store import save_workout_log
+
+    user_id = state["user_id"]
+
     if state.get("daily_log"):
-        save_daily_log(state["daily_log"])
-        # 保存训练记录到 workout_logs
-        from memory.store import save_workout_log
-        user_id = state["user_id"]
         save_daily_log(state["daily_log"], user_id=user_id)
 
-        muscle_group = state.get("_today_muscle_group", "全身")
-        workout_plan = state.get("workout_plan", "")
-        if workout_plan:
-            save_workout_log(
-                user_id=user_id,
-                date_str=state["daily_log"]["date"],
-                muscle_group=muscle_group,
-                exercises=workout_plan,
-            )
+    muscle_group = state.get("_today_muscle_group", "全身")
+    workout_plan = state.get("workout_plan", "")
+    if workout_plan and state.get("daily_log"):
+        save_workout_log(
+            user_id=user_id,
+            date_str=state["daily_log"]["date"],
+            muscle_group=muscle_group,
+            exercises=workout_plan,
+        )
 
     summary = f"""
 ╔══════════════════════════════════╗
