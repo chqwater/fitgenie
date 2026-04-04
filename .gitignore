@@ -1,0 +1,6 @@
+.env
+venv/
+__pycache__/
+*.pyc
+memory/fitgenie.db
+.DS_Store.env
