@@ -1,15 +1,42 @@
-import sqlite3
 import os
 from datetime import date, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "fitgenie.db")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+
+
+def _get_conn():
+    """统一获取数据库连接"""
+    if DATABASE_URL:
+        import psycopg2
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        import sqlite3
+        return sqlite3.connect(DB_PATH)
+
+
+def _ph() -> str:
+    """
+    占位符：PostgreSQL 用 %s，SQLite 用 ?
+    """
+    return "%s" if DATABASE_URL else "?"
 
 
 def init_db():
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""
+    # PostgreSQL 用 SERIAL，SQLite 用 AUTOINCREMENT
+    if DATABASE_URL:
+        pk = "SERIAL PRIMARY KEY"
+        unique_conflict = ""
+    else:
+        pk = "INTEGER PRIMARY KEY AUTOINCREMENT"
+        unique_conflict = ""
+
+    with _get_conn() as conn:
+        cur = conn.cursor()
+
+        cur.execute(f"""
             CREATE TABLE IF NOT EXISTS users (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                id              {pk},
                 username        TEXT NOT NULL UNIQUE,
                 password_hash   TEXT NOT NULL,
                 name            TEXT NOT NULL,
@@ -23,9 +50,10 @@ def init_db():
                 updated_at      TEXT NOT NULL
             )
         """)
-        conn.execute("""
+
+        cur.execute(f"""
             CREATE TABLE IF NOT EXISTS daily_logs (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          {pk},
                 user_id     INTEGER NOT NULL,
                 date        TEXT NOT NULL,
                 weight_kg   REAL,
@@ -33,62 +61,65 @@ def init_db():
                 calories    INTEGER,
                 workout     INTEGER,
                 mood        TEXT,
-                UNIQUE(user_id, date),
-                FOREIGN KEY(user_id) REFERENCES users(id)
+                UNIQUE(user_id, date)
             )
         """)
-        conn.execute("""
+
+        cur.execute(f"""
             CREATE TABLE IF NOT EXISTS workout_logs (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                id           {pk},
                 user_id      INTEGER NOT NULL,
                 date         TEXT NOT NULL,
                 muscle_group TEXT NOT NULL,
                 exercises    TEXT NOT NULL,
-                UNIQUE(user_id, date),
-                FOREIGN KEY(user_id) REFERENCES users(id)
+                UNIQUE(user_id, date)
             )
         """)
+
         conn.commit()
     print("[Memory] DB ready")
-
 
 # ── 用户 ──────────────────────────────────────────────────
 
 def create_user(username: str, password_hash: str, profile: dict) -> int:
     now = str(date.today())
-    with sqlite3.connect(DB_PATH) as conn:
+    p = _ph()
+    with _get_conn() as conn:
+        cur = conn.cursor()
         try:
-            cursor = conn.execute("""
+            cur.execute(f"""
                 INSERT INTO users
                     (username, password_hash, name, age, weight_kg,
                      height_cm, goal, activity_level, dietary_pref,
                      created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES ({p},{p},{p},{p},{p},{p},{p},{p},{p},{p},{p})
+                RETURNING id
             """, (
-                username,
-                password_hash,
-                profile["name"],
-                profile["age"],
-                profile["weight_kg"],
-                profile["height_cm"],
-                profile["goal"],
-                profile["activity_level"],
-                profile["dietary_pref"],
+                username, password_hash,
+                profile["name"], profile["age"], profile["weight_kg"],
+                profile["height_cm"], profile["goal"],
+                profile["activity_level"], profile["dietary_pref"],
                 now, now,
             ))
             conn.commit()
-            return cursor.lastrowid
-        except sqlite3.IntegrityError:
-            raise ValueError(f"用户名 '{username}' 已存在")
+            row = cur.fetchone()
+            return row[0]
+        except Exception as e:
+            if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+                raise ValueError(f"用户名 '{username}' 已存在")
+            raise
 
 
 def get_user_by_username(username: str) -> dict | None:
-    with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute("""
+    p = _ph()
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
             SELECT id, username, password_hash, name, age,
                    weight_kg, height_cm, goal, activity_level, dietary_pref
-            FROM users WHERE username = ?
-        """, (username,)).fetchone()
+            FROM users WHERE username = {p}
+        """, (username,))
+        row = cur.fetchone()
     if not row:
         return None
     keys = ["id", "username", "password_hash", "name", "age",
@@ -97,12 +128,15 @@ def get_user_by_username(username: str) -> dict | None:
 
 
 def get_user_by_id(user_id: int) -> dict | None:
-    with sqlite3.connect(DB_PATH) as conn:
-        row = conn.execute("""
+    p = _ph()
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
             SELECT id, username, name, age, weight_kg,
                    height_cm, goal, activity_level, dietary_pref
-            FROM users WHERE id = ?
-        """, (user_id,)).fetchone()
+            FROM users WHERE id = {p}
+        """, (user_id,))
+        row = cur.fetchone()
     if not row:
         return None
     keys = ["id", "username", "name", "age", "weight_kg",
@@ -113,58 +147,81 @@ def get_user_by_id(user_id: int) -> dict | None:
 def update_user(user_id: int, updates: dict):
     if not updates:
         return
+    p = _ph()
     now = str(date.today())
-    fields = ", ".join(f"{k} = ?" for k in updates)
+    fields = ", ".join(f"{k} = {p}" for k in updates)
     values = list(updates.values()) + [now, user_id]
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            f"UPDATE users SET {fields}, updated_at = ? WHERE id = ?",
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            f"UPDATE users SET {fields}, updated_at = {p} WHERE id = {p}",
             values
         )
         conn.commit()
 
 
-# ── 每日日志 ──────────────────────────────────────────────
-
 def save_daily_log(log: dict, user_id: int):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""
-            INSERT OR REPLACE INTO daily_logs
-                (user_id, date, weight_kg, steps, calories, workout, mood)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            user_id,
-            log["date"],
-            log.get("weight_kg"),
-            log.get("steps"),
-            log.get("calories_intake"),
-            int(log.get("workout_done", False)),
-            log.get("mood", "neutral"),
-        ))
+    p = _ph()
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        if DATABASE_URL:
+            # PostgreSQL 用 INSERT ... ON CONFLICT
+            cur.execute(f"""
+                INSERT INTO daily_logs
+                    (user_id, date, weight_kg, steps, calories, workout, mood)
+                VALUES ({p},{p},{p},{p},{p},{p},{p})
+                ON CONFLICT (user_id, date) DO UPDATE SET
+                    weight_kg = EXCLUDED.weight_kg,
+                    steps = EXCLUDED.steps,
+                    calories = EXCLUDED.calories,
+                    workout = EXCLUDED.workout,
+                    mood = EXCLUDED.mood
+            """, (
+                user_id, log["date"], log.get("weight_kg"),
+                log.get("steps"), log.get("calories_intake"),
+                int(log.get("workout_done", False)), log.get("mood", "neutral"),
+            ))
+        else:
+            # SQLite 用 INSERT OR REPLACE
+            cur.execute(f"""
+                INSERT OR REPLACE INTO daily_logs
+                    (user_id, date, weight_kg, steps, calories, workout, mood)
+                VALUES ({p},{p},{p},{p},{p},{p},{p})
+            """, (
+                user_id, log["date"], log.get("weight_kg"),
+                log.get("steps"), log.get("calories_intake"),
+                int(log.get("workout_done", False)), log.get("mood", "neutral"),
+            ))
         conn.commit()
     print(f"[Memory] Saved log: {log['date']}")
 
 
 def get_recent_weights(user_id: int, days: int = 7) -> list[float]:
+    p = _ph()
     cutoff = str(date.today() - timedelta(days=days))
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("""
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
             SELECT weight_kg FROM daily_logs
-            WHERE user_id = ? AND date >= ? AND weight_kg IS NOT NULL
+            WHERE user_id = {p} AND date >= {p} AND weight_kg IS NOT NULL
             ORDER BY date ASC
-        """, (user_id, cutoff)).fetchall()
+        """, (user_id, cutoff))
+        rows = cur.fetchall()
     return [r[0] for r in rows]
 
 
 def get_recent_logs(user_id: int, days: int = 7) -> list[dict]:
+    p = _ph()
     cutoff = str(date.today() - timedelta(days=days))
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("""
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
             SELECT date, weight_kg, steps, calories, workout, mood
             FROM daily_logs
-            WHERE user_id = ? AND date >= ?
+            WHERE user_id = {p} AND date >= {p}
             ORDER BY date DESC
-        """, (user_id, cutoff)).fetchall()
+        """, (user_id, cutoff))
+        rows = cur.fetchall()
     return [
         {
             "date": r[0],
@@ -179,12 +236,15 @@ def get_recent_logs(user_id: int, days: int = 7) -> list[dict]:
 
 
 def get_streak(user_id: int) -> int:
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("""
+    p = _ph()
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
             SELECT workout FROM daily_logs
-            WHERE user_id = ?
+            WHERE user_id = {p}
             ORDER BY date DESC LIMIT 30
-        """, (user_id,)).fetchall()
+        """, (user_id,))
+        rows = cur.fetchall()
     streak = 0
     for (workout,) in rows:
         if workout:
@@ -194,27 +254,39 @@ def get_streak(user_id: int) -> int:
     return streak
 
 
-# ── 训练记录 ──────────────────────────────────────────────
-
 def save_workout_log(user_id: int, date_str: str, muscle_group: str, exercises: str):
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("""
-            INSERT OR REPLACE INTO workout_logs
-                (user_id, date, muscle_group, exercises)
-            VALUES (?, ?, ?, ?)
-        """, (user_id, date_str, muscle_group, exercises))
+    p = _ph()
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        if DATABASE_URL:
+            cur.execute(f"""
+                INSERT INTO workout_logs (user_id, date, muscle_group, exercises)
+                VALUES ({p},{p},{p},{p})
+                ON CONFLICT (user_id, date) DO UPDATE SET
+                    muscle_group = EXCLUDED.muscle_group,
+                    exercises = EXCLUDED.exercises
+            """, (user_id, date_str, muscle_group, exercises))
+        else:
+            cur.execute(f"""
+                INSERT OR REPLACE INTO workout_logs
+                    (user_id, date, muscle_group, exercises)
+                VALUES ({p},{p},{p},{p})
+            """, (user_id, date_str, muscle_group, exercises))
         conn.commit()
 
 
 def get_recent_workouts(user_id: int, days: int = 7) -> list[dict]:
+    p = _ph()
     cutoff = str(date.today() - timedelta(days=days))
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute("""
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
             SELECT date, muscle_group, exercises
             FROM workout_logs
-            WHERE user_id = ? AND date >= ?
+            WHERE user_id = {p} AND date >= {p}
             ORDER BY date DESC
-        """, (user_id, cutoff)).fetchall()
+        """, (user_id, cutoff))
+        rows = cur.fetchall()
     return [
         {"date": r[0], "muscle_group": r[1], "exercises": r[2]}
         for r in rows
