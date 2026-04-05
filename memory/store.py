@@ -77,6 +77,9 @@ def init_db():
         """)
 
         conn.commit()
+
+    from memory.vector_store import init_vector_table
+    init_vector_table()
     print("[Memory] DB ready")
 
 # ── 用户 ──────────────────────────────────────────────────
