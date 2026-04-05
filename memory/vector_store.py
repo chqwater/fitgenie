@@ -1,156 +1,129 @@
 # memory/vector_store.py
-# 轻量向量记忆：用 SQLite 存策略文字，用 API embedding 做相似度搜索
-# 不依赖 chromadb / torch / transformers，镜像体积不变
+# ─────────────────────────────────────────────────────────────────────────────
+# 向量记忆层
+# 存储：每次 daily loop 结束后，把"情境+策略+结果"打包成文字存入 Chroma
+# 召回：Analyst 运行时，用当前情境查询最相似的历史案例
+# ─────────────────────────────────────────────────────────────────────────────
 
 import os
-import json
-import sqlite3
-import math
-from datetime import date
+import chromadb
+from chromadb.utils import embedding_functions
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "fitgenie.db")
+# 本地 Chroma 数据库路径
+CHROMA_PATH = os.path.join(os.path.dirname(__file__), "chroma_db")
 
-
-# ── 初始化向量表 ──────────────────────────────────────────
-
-def init_vector_table():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS strategy_vectors (
-            id          TEXT PRIMARY KEY,
-            user_id     INTEGER NOT NULL,
-            date        TEXT NOT NULL,
-            context     TEXT NOT NULL,
-            strategy    TEXT NOT NULL,
-            mode        TEXT NOT NULL,
-            embedding   TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
+# 用 sentence-transformers 生成 embedding，本地运行，不消耗 API
+EMBEDDING_FN = embedding_functions.SentenceTransformerEmbeddingFunction(
+    model_name="paraphrase-multilingual-MiniLM-L12-v2"  # 支持中文
+)
 
 
-# ── 生成 Embedding ────────────────────────────────────────
+def _get_collection(user_id: int):
+    """获取用户专属的 Chroma collection"""
+    client = chromadb.PersistentClient(path=CHROMA_PATH)
+    return client.get_or_create_collection(
+        name=f"user_{user_id}_strategies",
+        embedding_function=EMBEDDING_FN,
+        metadata={"hnsw:space": "cosine"},  # 余弦相似度
+    )
 
-def _get_embedding(text: str) -> list[float]:
-    """调用混元 API 生成文字的向量表示"""
-    try:
-        from llm_client import get_client
-        client = get_client()
-        response = client.embeddings.create(
-            model="text-embedding-v1",
-            input=text,
-        )
-        return response.data[0].embedding
-    except Exception as e:
-        print(f"[VectorStore] ⚠️ Embedding 失败: {e}")
-        return []
-
-
-# ── 余弦相似度计算 ────────────────────────────────────────
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
-
-
-# ── 存储策略 ──────────────────────────────────────────────
 
 def save_strategy(user_id: int, state: dict):
+    """
+    每次 daily loop 结束后调用。
+    把情境 + 策略存入向量库。
+    """
     daily_log = state.get("daily_log", {})
     if not daily_log.get("date"):
         return
 
+    # ── 构建情境描述文字 ────────────────────────────────────
+    # 这段文字会被转成向量，所以要尽量包含关键信息
     context_text = f"""
+日期：{daily_log.get('date')}
 体重：{daily_log.get('weight_kg')}kg
-情绪：{daily_log.get('mood')}
+步数：{daily_log.get('steps')}
+热量摄入：{daily_log.get('calories_intake')}kcal
 完成训练：{'是' if daily_log.get('workout_done') else '否'}
+情绪：{daily_log.get('mood')}
 是否停滞：{'是' if state.get('plateau_detected') else '否'}
 趋势：{state.get('trend_summary', '')}
 """.strip()
 
+    # ── 构建策略描述文字 ────────────────────────────────────
     strategy_text = f"""
 调整模式：{state.get('adjustment_mode', 'normal')}
-训练：{state.get('workout_plan', '')[:150]}
-饮食：{state.get('diet_plan', '')[:150]}
+训练计划：{state.get('workout_plan', '')[:200]}
+饮食方案：{state.get('diet_plan', '')[:200]}
 """.strip()
 
-    embedding = _get_embedding(context_text)
-    if not embedding:
-        print("[VectorStore] ⚠️ 无法生成 embedding，跳过存储")
-        return
-
+    # ── 存入 Chroma ──────────────────────────────────────────
+    collection = _get_collection(user_id)
     doc_id = f"{user_id}_{daily_log['date']}"
-    conn = sqlite3.connect(DB_PATH)
+
     try:
-        conn.execute("""
-            INSERT OR REPLACE INTO strategy_vectors
-                (id, user_id, date, context, strategy, mode, embedding)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (
-            doc_id, user_id,
-            daily_log["date"],
-            context_text,
-            strategy_text,
-            state.get("adjustment_mode", "normal"),
-            json.dumps(embedding),
-        ))
-        conn.commit()
+        collection.upsert(
+            ids=[doc_id],
+            documents=[context_text],           # 用情境文字生成向量
+            metadatas=[{
+                "date": daily_log["date"],
+                "mode": state.get("adjustment_mode", "normal"),
+                "plateau": str(state.get("plateau_detected", False)),
+                "mood": daily_log.get("mood", "neutral"),
+                "strategy": strategy_text,       # 策略存在 metadata 里
+            }],
+        )
         print(f"[VectorStore] 💾 策略已存储: {daily_log['date']}")
     except Exception as e:
         print(f"[VectorStore] ⚠️ 存储失败: {e}")
-    finally:
-        conn.close()
 
-
-# ── 召回相似策略 ──────────────────────────────────────────
 
 def recall_similar_strategy(user_id: int, current_context: str, n_results: int = 2) -> list[dict]:
-    query_embedding = _get_embedding(current_context)
-    if not query_embedding:
-        return []
+    """
+    用当前情境查询最相似的历史案例。
+    返回最相似的 N 条历史策略。
+    """
+    collection = _get_collection(user_id)
 
-    conn = sqlite3.connect(DB_PATH)
     try:
-        rows = conn.execute("""
-            SELECT date, context, strategy, mode, embedding
-            FROM strategy_vectors
-            WHERE user_id = ?
-            ORDER BY date DESC
-            LIMIT 20
-        """, (user_id,)).fetchall()
-    finally:
-        conn.close()
+        # 检查是否有足够数据
+        if collection.count() == 0:
+            return []
 
-    if not rows:
+        results = collection.query(
+            query_texts=[current_context],
+            n_results=min(n_results, collection.count()),
+            include=["documents", "metadatas", "distances"],
+        )
+
+        recalled = []
+        for i, metadata in enumerate(results["metadatas"][0]):
+            distance = results["distances"][0][i]
+            similarity = 1 - distance  # 余弦距离转相似度
+
+            # 只返回相似度足够高的结果
+            if similarity > 0.5:
+                recalled.append({
+                    "date": metadata["date"],
+                    "mode": metadata["mode"],
+                    "mood": metadata["mood"],
+                    "plateau": metadata["plateau"],
+                    "strategy": metadata["strategy"],
+                    "similarity": round(similarity, 3),
+                })
+
+        return recalled
+
+    except Exception as e:
+        print(f"[VectorStore] ⚠️ 召回失败: {e}")
         return []
 
-    scored = []
-    for row in rows:
-        date_str, context, strategy, mode, emb_json = row
-        emb = json.loads(emb_json)
-        similarity = _cosine_similarity(query_embedding, emb)
-        if similarity > 0.5:
-            scored.append({
-                "date": date_str,
-                "mode": mode,
-                "strategy": strategy,
-                "similarity": round(similarity, 3),
-            })
-
-    scored.sort(key=lambda x: x["similarity"], reverse=True)
-    return scored[:n_results]
-
-
-# ── 构建当前情境文字 ──────────────────────────────────────
 
 def build_context_text(state: dict) -> str:
+    """
+    把当前 State 转成情境描述文字，用于向量查询。
+    和 save_strategy 里的格式保持一致。
+    """
     daily_log = state.get("daily_log", {})
     return f"""
 体重：{daily_log.get('weight_kg')}kg

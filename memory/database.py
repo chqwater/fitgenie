@@ -1,6 +1,7 @@
 # memory/database.py
 import os
 import sqlite3
+from urllib.parse import urlparse
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
