@@ -1,26 +1,24 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from memory.store import init_db, load_user
-from user_profile import register_user
+from memory.store import init_db, get_user_by_id
 from graph import fitgenie_graph
 
 
 def main():
     init_db()
 
-    # ── 检测用户档案 ──────────────────────────────────────
-    user_profile = load_user()
+    # CLI 模式默认用 user_id=1
+    user = get_user_by_id(1)
+    if not user:
+        print("❌ 数据库里没有用户，请先通过前端注册")
+        return
 
-    if user_profile is None:
-        # 首次启动，引导注册
-        user_profile = register_user()
-    else:
-        print(f"\n[Profile] 欢迎回来，{user_profile['name']} 👋")
+    print(f"\n[Profile] 欢迎回来，{user['name']} 👋")
 
-    # ── 构建初始 State ────────────────────────────────────
     initial_state = {
-        "user_profile": user_profile,
+        "user_id": user["id"],
+        "user_profile": user,
         "daily_log": {},
         "plateau_detected": False,
         "trend_summary": "",
