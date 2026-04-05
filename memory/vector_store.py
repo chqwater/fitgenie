@@ -7,15 +7,32 @@
 
 import os
 import chromadb
-from chromadb.utils import embedding_functions
+from chromadb import Documents, EmbeddingFunction, Embeddings
+from llm_client import get_client
 
-# 本地 Chroma 数据库路径
 CHROMA_PATH = os.path.join(os.path.dirname(__file__), "chroma_db")
 
-# 用 sentence-transformers 生成 embedding，本地运行，不消耗 API
-EMBEDDING_FN = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="paraphrase-multilingual-MiniLM-L12-v2"  # 支持中文
-)
+
+class HunyuanEmbeddingFunction(EmbeddingFunction):
+    """用混元 API 生成 embedding，替代本地 sentence-transformers"""
+
+    def __call__(self, input: Documents) -> Embeddings:
+        client = get_client()
+        embeddings = []
+        for text in input:
+            try:
+                response = client.embeddings.create(
+                    model="text-embedding-ada-002",  # 混元兼容 OpenAI embedding
+                    input=text,
+                )
+                embeddings.append(response.data[0].embedding)
+            except Exception as e:
+                print(f"[Embedding] ⚠️ 生成失败: {e}，使用零向量")
+                embeddings.append([0.0] * 1536)
+        return embeddings
+
+
+EMBEDDING_FN = HunyuanEmbeddingFunction()
 
 
 def _get_collection(user_id: int):
