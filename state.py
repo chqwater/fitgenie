@@ -2,8 +2,8 @@ from typing import TypedDict, Optional
 
 
 class UserProfile(TypedDict):
-    id: int                # 新增
-    username: str          # 新增
+    id: int
+    username: str
     name: str
     age: int
     weight_kg: float
@@ -22,8 +22,17 @@ class DailyLog(TypedDict):
     mood: str
 
 
+class AssistantDirectives(TypedDict, total=False):
+    """小助手向各 Agent 传递的结构化指令"""
+    mode: Optional[str]          # conservative / normal / aggressive / None
+    workout_focus: str           # 希望侧重的训练内容
+    workout_avoid: str           # 需要避免的动作/肌群
+    diet_adjustments: str        # 饮食调整要求
+    general_notes: str           # 其他注意事项
+
+
 class FitGenieState(TypedDict):
-    user_id: int           # 新增
+    user_id: int
     user_profile: UserProfile
     daily_log: DailyLog
     plateau_detected: bool
@@ -35,3 +44,6 @@ class FitGenieState(TypedDict):
     conflict_flag: bool
     adjustment_mode: str
     final_summary: str
+    # 小助手扩展字段
+    assistant_directives: Optional[AssistantDirectives]  # 小助手传入的个性化指令
+    user_preferences: Optional[dict]                     # 用户长期偏好画像

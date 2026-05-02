@@ -18,12 +18,17 @@ def coach_agent(state: FitGenieState) -> dict:
     mode = state.get("adjustment_mode", "normal")
     intensity_hint = INTENSITY.get(mode, "保持当前训练量")
 
+    # 小助手指令
+    directives = state.get("assistant_directives") or {}
+    user_preferences = state.get("user_preferences") or {}
+    directive_hint = _build_directive_hint(directives, user_preferences)
+
     # ── 读取训练历史 ──────────────────────────────────────
     recent_workouts = get_recent_workouts(user_id=state["user_id"], days=7)
     history_context = _format_history(recent_workouts)
 
     # ── 第一步：让 LLM 决定今天练什么肌群 ────────────────
-    muscle_group = _decide_muscle_group(client, history_context, intensity_hint)
+    muscle_group = _decide_muscle_group(client, history_context, intensity_hint, directives)
     print(f"[Coach] 今日肌群：{muscle_group}")
 
     # ── 第二步：调用 Tool 从真实数据库获取动作 ────────────
@@ -38,7 +43,7 @@ def coach_agent(state: FitGenieState) -> dict:
 【今日目标肌群】{muscle_group}
 【训练方向】{intensity_hint}
 【用户体重】{profile['weight_kg']}kg
-
+{directive_hint}
 【可用动作库（来自 ExerciseDB）】
 {exercise_list}
 
@@ -78,18 +83,37 @@ def coach_agent(state: FitGenieState) -> dict:
     return {"workout_plan": plan}
 
 
-def _decide_muscle_group(client, history_context: str, intensity_hint: str) -> str:
+def _build_directive_hint(directives: dict, user_preferences: dict) -> str:
+    lines = []
+    if directives.get("workout_focus"):
+        lines.append(f"【用户特别要求-侧重】{directives['workout_focus']}")
+    if directives.get("workout_avoid"):
+        lines.append(f"【用户特别要求-避免】{directives['workout_avoid']}")
+    if directives.get("general_notes"):
+        lines.append(f"【用户备注】{directives['general_notes']}")
+    if user_preferences.get("workout_dislikes"):
+        lines.append(f"【用户长期偏好-避免动作】{user_preferences['workout_dislikes']}")
+    if user_preferences.get("injury_notes"):
+        lines.append(f"【用户身体状况】{user_preferences['injury_notes']}")
+    return "\n".join(lines) + "\n" if lines else ""
+
+
+def _decide_muscle_group(client, history_context: str, intensity_hint: str, directives: dict = None) -> str:
     """
     第一步：让 LLM 根据训练历史决定今天练什么肌群。
     这是纯决策，不生成计划，token 消耗少。
     """
+    focus_hint = ""
+    if directives and directives.get("workout_focus"):
+        focus_hint = f"\n用户特别要求侧重：{directives['workout_focus']}"
+
     prompt = f"""根据以下训练历史，决定今天应该训练哪个肌群。
 遵循推拉腿分化原则，避免连续两天练同一肌群。
 
 训练历史：
 {history_context}
 
-训练方向：{intensity_hint}
+训练方向：{intensity_hint}{focus_hint}
 
 只输出肌群名称，例如：胸/三头、背/二头、腿/臀、肩/核心
 不要输出其他任何内容。"""

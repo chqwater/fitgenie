@@ -26,10 +26,8 @@ def init_db():
     # PostgreSQL 用 SERIAL，SQLite 用 AUTOINCREMENT
     if DATABASE_URL:
         pk = "SERIAL PRIMARY KEY"
-        unique_conflict = ""
     else:
         pk = "INTEGER PRIMARY KEY AUTOINCREMENT"
-        unique_conflict = ""
 
     with _get_conn() as conn:
         cur = conn.cursor()
@@ -73,6 +71,26 @@ def init_db():
                 muscle_group TEXT NOT NULL,
                 exercises    TEXT NOT NULL,
                 UNIQUE(user_id, date)
+            )
+        """)
+
+        # 小助手对话记录
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS assistant_conversations (
+                id          {pk},
+                user_id     INTEGER NOT NULL,
+                role        TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                created_at  TEXT NOT NULL
+            )
+        """)
+
+        # 小助手提取的用户偏好（每用户一条，JSON 存储）
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id     INTEGER PRIMARY KEY,
+                preferences TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
             )
         """)
 
@@ -293,3 +311,78 @@ def get_recent_workouts(user_id: int, days: int = 7) -> list[dict]:
         {"date": r[0], "muscle_group": r[1], "exercises": r[2]}
         for r in rows
     ]
+
+
+# ── 小助手对话 ──────────────────────────────────────────────
+
+def save_assistant_message(user_id: int, role: str, content: str):
+    """保存一条对话消息（role: 'user' 或 'assistant'）"""
+    import datetime
+    p = _ph()
+    now = datetime.datetime.now().isoformat()
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
+            INSERT INTO assistant_conversations (user_id, role, content, created_at)
+            VALUES ({p},{p},{p},{p})
+        """, (user_id, role, content, now))
+        conn.commit()
+
+
+def get_assistant_history(user_id: int, limit: int = 20) -> list[dict]:
+    """获取最近 N 条对话历史"""
+    p = _ph()
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT role, content, created_at FROM assistant_conversations
+            WHERE user_id = {p}
+            ORDER BY created_at DESC LIMIT {limit}
+        """, (user_id,))
+        rows = cur.fetchall()
+    # 按时间正序返回
+    return [{"role": r[0], "content": r[1], "created_at": r[2]} for r in reversed(rows)]
+
+
+# ── 用户偏好 ──────────────────────────────────────────────
+
+def save_user_preferences(user_id: int, preferences: dict):
+    """保存/更新小助手提取的用户偏好"""
+    import json, datetime
+    p = _ph()
+    now = str(datetime.date.today())
+    pref_json = json.dumps(preferences, ensure_ascii=False)
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        if DATABASE_URL:
+            cur.execute(f"""
+                INSERT INTO user_preferences (user_id, preferences, updated_at)
+                VALUES ({p},{p},{p})
+                ON CONFLICT (user_id) DO UPDATE SET
+                    preferences = EXCLUDED.preferences,
+                    updated_at = EXCLUDED.updated_at
+            """, (user_id, pref_json, now))
+        else:
+            cur.execute(f"""
+                INSERT OR REPLACE INTO user_preferences (user_id, preferences, updated_at)
+                VALUES ({p},{p},{p})
+            """, (user_id, pref_json, now))
+        conn.commit()
+
+
+def get_user_preferences(user_id: int) -> dict:
+    """获取用户偏好，不存在则返回空 dict"""
+    import json
+    p = _ph()
+    with _get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT preferences FROM user_preferences WHERE user_id = {p}
+        """, (user_id,))
+        row = cur.fetchone()
+    if not row:
+        return {}
+    try:
+        return json.loads(row[0])
+    except Exception:
+        return {}

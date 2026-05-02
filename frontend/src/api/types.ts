@@ -55,3 +55,41 @@ export interface UserProfile {
   activity_level: string
   dietary_pref: string
 }
+
+// ── 小助手 ──────────────────────────────────────────────
+
+export interface AssistantDirectives {
+  mode?: 'conservative' | 'normal' | 'aggressive' | null
+  workout_focus?: string
+  workout_avoid?: string
+  diet_adjustments?: string
+  general_notes?: string
+}
+
+export interface AssistantChatRequest {
+  message: string
+  current_plan?: Record<string, unknown> | null
+}
+
+export interface AssistantChatResponse {
+  reply: string
+  directives?: AssistantDirectives | null
+  preferences_updated: boolean
+}
+
+export interface AssistantHistoryItem {
+  role: 'user' | 'assistant'
+  content: string
+  created_at: string
+}
+
+// ── 重新生成 ──────────────────────────────────────────────
+
+export interface RegenerateRequest {
+  weight_kg: number
+  steps: number
+  calories_intake: number
+  workout_done: boolean
+  mood: 'good' | 'neutral' | 'tired'
+  directives?: AssistantDirectives | null
+}

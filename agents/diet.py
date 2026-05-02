@@ -23,6 +23,11 @@ def diet_agent(state: FitGenieState) -> dict:
     profile = state["user_profile"]
     mode = state.get("adjustment_mode", "normal")
 
+    # 小助手指令
+    directives = state.get("assistant_directives") or {}
+    user_preferences = state.get("user_preferences") or {}
+    diet_directive = _build_diet_directive(directives, user_preferences)
+
     bmr = _calc_bmr(profile)
     tdee = round(bmr * ACTIVITY_MULTIPLIER.get(profile["activity_level"], 1.55))
     deficit = DEFICIT.get(mode, 400)
@@ -40,7 +45,7 @@ def diet_agent(state: FitGenieState) -> dict:
     - 脂肪：{fat_g}g
     - 碳水化合物：{carb_g}g
     - 饮食偏好：{profile['dietary_pref']}
-
+    {diet_directive}
     【输出要求】
     只输出 JSON，不要有任何其他文字，格式如下：
     {{
@@ -83,6 +88,17 @@ def diet_agent(state: FitGenieState) -> dict:
 
     print(f"[Diet] 目标热量 {target} kcal")
     return {"diet_plan": plan}
+
+
+def _build_diet_directive(directives: dict, user_preferences: dict) -> str:
+    lines = []
+    if directives.get("diet_adjustments"):
+        lines.append(f"- 用户特别要求：{directives['diet_adjustments']}")
+    if user_preferences.get("diet_restrictions"):
+        lines.append(f"- 饮食限制（长期）：{user_preferences['diet_restrictions']}")
+    if user_preferences.get("diet_preferences"):
+        lines.append(f"- 饮食偏好（长期）：{user_preferences['diet_preferences']}")
+    return "\n    ".join(lines) + "\n" if lines else ""
 
 
 def _calc_bmr(profile: dict) -> float:

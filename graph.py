@@ -1,3 +1,4 @@
+import json
 from langgraph.graph import StateGraph, END
 from state import FitGenieState
 from agents.tracker import tracker_agent
@@ -9,7 +10,22 @@ from memory.store import save_daily_log
 
 
 def orchestrator_node(state: FitGenieState) -> dict:
+    """
+    标准 Orchestrator：基于停滞检测 + 情绪做模式仲裁。
+    若 state 中已有小助手指令（assistant_directives），则直接采用助手的 mode 决策。
+    """
     print("\n[Orchestrator] 仲裁决策...")
+
+    directives = state.get("assistant_directives") or {}
+    assistant_mode = directives.get("mode") if directives else None
+
+    if assistant_mode:
+        # 小助手已指定模式，跳过规则仲裁
+        print(f"[Orchestrator] 小助手覆盖模式 → {assistant_mode}")
+        return {
+            "conflict_flag": False,
+            "adjustment_mode": assistant_mode,
+        }
 
     plateau = state.get("plateau_detected", False)
     mood = state.get("daily_log", {}).get("mood", "neutral")
@@ -46,7 +62,6 @@ def finalize_node(state: FitGenieState) -> dict:
 
     if state.get("daily_log"):
         save_daily_log(state["daily_log"], user_id=user_id)
-        # 存入向量记忆
         from memory.vector_store import save_strategy
         save_strategy(user_id, state)
 
@@ -60,10 +75,16 @@ def finalize_node(state: FitGenieState) -> dict:
             exercises=workout_plan,
         )
 
+    directives = state.get("assistant_directives") or {}
+    mode_label = state.get('adjustment_mode', 'normal').upper()
+    assistant_note = ""
+    if directives:
+        assistant_note = "\n  [小助手个性化定制]"
+
     summary = f"""
 ╔══════════════════════════════════╗
   FitGenie · {state['daily_log']['date']}
-  模式：{state.get('adjustment_mode', 'normal').upper()}
+  模式：{mode_label}{assistant_note}
 ╚══════════════════════════════════╝
 
 【训练计划】
@@ -104,4 +125,28 @@ def build_graph():
     return g.compile()
 
 
+def build_regenerate_graph():
+    """
+    重新生成图：跳过 tracker（数据已存），直接从 analyst 开始。
+    小助手指令会通过 orchestrator_node 传递给 coach/diet agent。
+    """
+    g = StateGraph(FitGenieState)
+
+    g.add_node("analyst",     analyst_agent)
+    g.add_node("orchestrate", orchestrator_node)
+    g.add_node("plan",        coach_and_diet_node)
+    g.add_node("mental",      mental_agent)
+    g.add_node("finalize",    finalize_node)
+
+    g.set_entry_point("analyst")
+    g.add_edge("analyst",     "orchestrate")
+    g.add_edge("orchestrate", "plan")
+    g.add_edge("plan",        "mental")
+    g.add_edge("mental",      "finalize")
+    g.add_edge("finalize",    END)
+
+    return g.compile()
+
+
 fitgenie_graph = build_graph()
+fitgenie_regenerate_graph = build_regenerate_graph()

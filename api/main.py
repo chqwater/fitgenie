@@ -8,6 +8,7 @@ from memory.store import init_db
 from api.auth import auth_router
 from api.routes.daily import router as daily_router
 from api.routes.profile import router as profile_router
+from api.routes.assistant import router as assistant_router
 
 app = FastAPI(
     title="FitGenie API",
@@ -37,6 +38,7 @@ def startup():
 app.include_router(auth_router)
 app.include_router(daily_router)
 app.include_router(profile_router)
+app.include_router(assistant_router)
 
 
 @app.get("/")

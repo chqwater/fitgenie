@@ -1,7 +1,9 @@
 import axios from 'axios'
 import type {
   RegisterRequest, LoginRequest, TokenResponse,
-  CheckinRequest, CheckinResponse, DailyLogItem, UserProfile
+  CheckinRequest, CheckinResponse, DailyLogItem, UserProfile,
+  AssistantChatRequest, AssistantChatResponse, AssistantHistoryItem,
+  RegenerateRequest,
 } from './types'
 
 const http = axios.create({
@@ -40,6 +42,8 @@ export const authApi = {
 export const dailyApi = {
   checkin: (data: CheckinRequest) =>
     http.post<CheckinResponse>('/daily/checkin', data),
+  regenerate: (data: RegenerateRequest) =>
+    http.post<CheckinResponse>('/daily/regenerate', data),
   history: (days = 7) =>
     http.get<DailyLogItem[]>(`/daily/history?days=${days}`),
 }
@@ -47,4 +51,13 @@ export const dailyApi = {
 export const profileApi = {
   get: () => http.get<UserProfile>('/profile'),
   update: (data: Partial<UserProfile>) => http.put<UserProfile>('/profile', data),
+}
+
+export const assistantApi = {
+  chat: (data: AssistantChatRequest) =>
+    http.post<AssistantChatResponse>('/assistant/chat', data),
+  history: (limit = 20) =>
+    http.get<AssistantHistoryItem[]>(`/assistant/history?limit=${limit}`),
+  preferences: () =>
+    http.get('/assistant/preferences'),
 }

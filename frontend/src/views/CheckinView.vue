@@ -3,6 +3,7 @@
     <div class="blob blob--1" />
     <div class="blob blob--2" />
 
+
     <!-- 导航 -->
     <nav class="navbar">
       <div class="nav-left" @click="router.push('/')">
@@ -174,6 +175,31 @@
             </div>
           </div>
 
+          <!-- 重新生成 -->
+          <div class="regenerate-section card">
+            <div class="regenerate-inner">
+              <div class="regenerate-left">
+                <div class="regenerate-title">对方案不满意？</div>
+                <div class="regenerate-sub">
+                  <span v-if="pendingDirectives">
+                    ⚡ 小助手已记录你的调整意见，点击重新生成
+                  </span>
+                  <span v-else>
+                    点击右下角 🤖 小助手告诉我你的想法，或直接重新生成
+                  </span>
+                </div>
+              </div>
+              <el-button
+                class="regen-btn"
+                :loading="regenerating"
+                @click="handleRegenerate"
+              >
+                <span v-if="!regenerating">{{ pendingDirectives ? '✨ 个性化重新生成' : '🔄 重新生成' }}</span>
+                <span v-else>AI 重新规划中...</span>
+              </el-button>
+            </div>
+          </div>
+
           <!-- 操作按钮 -->
           <div class="result-actions">
             <el-button size="large" @click="router.push('/')">回到主页</el-button>
@@ -186,16 +212,20 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { dailyApi, profileApi } from '@/api'
 import type { CheckinResponse } from '@/api/types'
+import { useAssistantStore } from '@/stores/assistant'
 
 const router = useRouter()
+const assistantStore = useAssistantStore()
 const loading = ref(false)
+const regenerating = ref(false)
 const result = ref<CheckinResponse | null>(null)
 const tipIndex = ref(0)
+const pendingDirectives = computed(() => assistantStore.pendingDirectives)
 let tipTimer: ReturnType<typeof setInterval>
 
 const loadingTips = [
@@ -245,12 +275,36 @@ async function handleCheckin() {
   try {
     const res = await dailyApi.checkin(form)
     result.value = res.data
+    assistantStore.setCurrentPlan(res.data)
     localStorage.setItem('lastCheckin', JSON.stringify(res.data))
     ElMessage({ message: '方案生成成功 🎉', type: 'success' })
   } catch (e: any) {
     ElMessage({ message: e.response?.data?.detail || '打卡失败，请重试', type: 'error' })
   } finally {
     loading.value = false
+    clearInterval(tipTimer)
+  }
+}
+
+async function handleRegenerate() {
+  regenerating.value = true
+  tipIndex.value = 0
+  tipTimer = setInterval(() => {
+    tipIndex.value = (tipIndex.value + 1) % loadingTips.length
+  }, 3000)
+
+  try {
+    const directives = assistantStore.pendingDirectives ?? null
+    const res = await dailyApi.regenerate({ ...form, directives })
+    result.value = res.data
+    assistantStore.setCurrentPlan(res.data)
+    assistantStore.clearDirectives()
+    localStorage.setItem('lastCheckin', JSON.stringify(res.data))
+    ElMessage({ message: directives ? '个性化方案已重新生成 ✨' : '方案已重新生成 🔄', type: 'success' })
+  } catch (e: any) {
+    ElMessage({ message: e.response?.data?.detail || '重新生成失败，请重试', type: 'error' })
+  } finally {
+    regenerating.value = false
     clearInterval(tipTimer)
   }
 }
@@ -572,6 +626,44 @@ onUnmounted(() => clearInterval(tipTimer))
   color: var(--text-secondary);
   line-height: 1.7;
   font-style: italic;
+}
+
+.regenerate-section {
+  padding: 20px 24px;
+  margin-bottom: 16px;
+  animation: slideUp 0.5s ease 0.35s both;
+  background: linear-gradient(135deg, rgba(94,162,130,0.05), rgba(240,124,90,0.05)) !important;
+  border: 1.5px solid rgba(94,162,130,0.15) !important;
+}
+.regenerate-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.regenerate-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.regenerate-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.regen-btn {
+  flex-shrink: 0;
+  height: 40px !important;
+  padding: 0 20px !important;
+  border-radius: var(--radius-sm) !important;
+  font-size: 13px !important;
+  background: linear-gradient(135deg, #5ea282, #f07c5a) !important;
+  border: none !important;
+  color: white !important;
+}
+.regen-btn:hover:not(:disabled) {
+  opacity: 0.9 !important;
 }
 
 .result-actions {
