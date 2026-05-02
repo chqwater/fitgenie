@@ -62,8 +62,6 @@ def finalize_node(state: FitGenieState) -> dict:
 
     if state.get("daily_log"):
         save_daily_log(state["daily_log"], user_id=user_id)
-        from memory.vector_store import save_strategy
-        save_strategy(user_id, state)
 
     muscle_group = state.get("_today_muscle_group", "全身")
     workout_plan = state.get("workout_plan", "")
